@@ -5,18 +5,17 @@ import GitHubProvider from 'next-auth/providers/github'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { prisma } from '@/lib/database/connection'
 import bcrypt from 'bcryptjs'
-import config from '../../config.example'
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
   providers: [
     GoogleProvider({
-      clientId: config.oauth.google.clientId,
-      clientSecret: config.oauth.google.clientSecret,
+      clientId: process.env.GOOGLE_CLIENT_ID || '',
+      clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
     }),
     GitHubProvider({
-      clientId: config.oauth.github.clientId,
-      clientSecret: config.oauth.github.clientSecret,
+      clientId: process.env.GITHUB_CLIENT_ID || '',
+      clientSecret: process.env.GITHUB_CLIENT_SECRET || '',
     }),
     CredentialsProvider({
       name: 'credentials',
@@ -25,29 +24,20 @@ export const authOptions: NextAuthOptions = {
         password: { label: 'Password', type: 'password' }
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) {
-          return null
-        }
+        if (!credentials?.email || !credentials?.password) return null
 
         try {
           const user = await prisma.user.findUnique({
             where: { email: credentials.email }
           })
 
-          if (!user) {
-            return null
-          }
+          if (!user) return null
 
-          // For OAuth users, they don't have passwords
-          if (!user.password) {
-            return null
-          }
+          // For OAuth users or users without password
+          if (!user?.password) return null
 
           const isPasswordValid = await bcrypt.compare(credentials.password, user.password)
-
-          if (!isPasswordValid) {
-            return null
-          }
+          if (!isPasswordValid) return null
 
           return {
             id: user.id,
@@ -63,58 +53,45 @@ export const authOptions: NextAuthOptions = {
       }
     })
   ],
-  session: {
-    strategy: 'jwt',
-    maxAge: 7 * 24 * 60 * 60, // 7 days
-  },
-  jwt: {
-    maxAge: 7 * 24 * 60 * 60, // 7 days
-  },
+  session: { strategy: 'jwt', maxAge: 7 * 24 * 60 * 60 },
+  jwt: { maxAge: 7 * 24 * 60 * 60 },
   callbacks: {
     async jwt({ token, user, account }) {
-      // Persist the OAuth access_token and or the user id to the token right after signin
       if (account) {
         token.accessToken = account.access_token
         token.provider = account.provider
       }
-      
       if (user) {
         token.role = user.role
         token.id = user.id
       }
-      
       return token
     },
     async session({ session, token }) {
-      // Send properties to the client
       if (token) {
         session.user.id = token.id as string
         session.user.role = token.role as string
         session.accessToken = token.accessToken as string
         session.provider = token.provider as string
       }
-      
       return session
     },
-    async signIn({ user, account, profile }) {
+    async signIn({ user }) {
       try {
-        // Check if user exists in database
         const existingUser = await prisma.user.findUnique({
           where: { email: user.email! }
         })
 
         if (!existingUser) {
-          // Create new user
           await prisma.user.create({
             data: {
               email: user.email!,
               name: user.name,
               image: user.image,
-              role: 'STUDENT', // Default role
+              role: 'STUDENT',
             }
           })
         }
-
         return true
       } catch (error) {
         console.error('Sign in error:', error)
@@ -128,13 +105,13 @@ export const authOptions: NextAuthOptions = {
     error: '/auth/error',
   },
   events: {
-    async signIn({ user, account, profile, isNewUser }) {
+    async signIn({ user, account }) {
       console.log(`User ${user.email} signed in via ${account?.provider}`)
     },
-    async signOut({ session, token }) {
+    async signOut({ session }) {
       console.log(`User ${session?.user?.email} signed out`)
     },
   },
-  debug: config.app.env === 'development',
-  secret: config.auth.nextAuth.secret,
-}
+  debug: process.env.NODE_ENV === 'development',
+  secret: process.env.NEXTAUTH_SECRET,
+    }
